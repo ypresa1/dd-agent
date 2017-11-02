@@ -1,0 +1,65 @@
+FROM registry.access.redhat.com/rhel-atomic
+MAINTAINER Datadog <package@datadoghq.com>
+
+ENV DOCKER_DD_AGENT=yes \
+    DD_LOGS_STDOUT=yes \
+    AGENT_VERSION=5.16.0-1.x86_64.rpm
+
+LABEL name="datadog/docker-dd-agent:latest-rhel" \
+      vendor="Datadog" \
+      version="${AGENT_VERSION}" \
+      release="" \
+      summary="A containerized ersion ofthe Datadog Agent." \
+      description="The Datadog Agent provides real-time performance tracking and visualization of your operating system and application metrics." \
+### Required labels above - recommended below
+      url="https://www.datadoghq.com" \
+      run='docker run -tdi --name ${NAME} ${IMAGE}' \
+      run='docker run -d --name dd-agent -v /var/run/docker.sock:/var/run/docker.sock:ro \
+           -v /proc/:/host/proc/:ro \
+           -v /sys/fs/cgroup/:/host/sys/fs/cgroup:ro \
+           -e API_KEY={your_api_key_here} \
+           -e SD_BACKEND=docker \
+           ${IMAGE}' \
+      io.k8s.description="Datadog Agent provides real-time performance tracking and visualization of your Kubernetes clusters, containers, operating system and application metrics." \
+      io.k8s.display-name="Datadog Agent"
+
+# add man page
+COPY help.1 /help.1
+
+#Adding Datadog repo
+#COPY datadog.repo /etc/yum.repos.d/datadog.repo
+
+# Install the Agent
+RUN microdnf --enablerepo=rhel-7-server-rpms \
+    install initscripts && microdnf clean all
+
+RUN curl -L -o /opt/DATADOG_RPM_KEY.public  https://s3.amazonaws.com/yum.datadoghq.com/DATADOG_RPM_KEY.public \
+ && rpm --import /opt/DATADOG_RPM_KEY.public \
+ && curl -L -o /opt/datadog-agent-${AGENT_VERSION}  https://s3.amazonaws.com/yum.datadoghq.com/rpm/x86_64/datadog-agent-${AGENT_VERSION} \
+ && rpm -i /opt/datadog-agent-${AGENT_VERSION} \
+ && rm /opt/datadog-agent-${AGENT_VERSION}
+
+RUN mv /etc/dd-agent/datadog.conf.example /etc/dd-agent/datadog.conf \
+ && sed -i -e"s/^.*non_local_traffic:.*$/non_local_traffic: yes/" /etc/dd-agent/datadog.conf \
+ && sed -i -e"s/^.*log_to_syslog:.*$/log_to_syslog: no/" /etc/dd-agent/datadog.conf \
+ && sed -i "/user=dd-agent/d" /etc/dd-agent/supervisor.conf \
+ && sed -i 's/AGENTUSER="dd-agent"/AGENTUSER="root"/g' /etc/init.d/datadog-agent \
+ && rm /etc/dd-agent/conf.d/network.yaml.default \
+ || chmod +x /etc/init.d/datadog-agent
+
+COPY conf.d/docker_daemon.yaml /etc/dd-agent/conf.d/docker_daemon.yaml
+
+COPY entrypoint.sh /entrypoint.sh
+
+VOLUME ["/conf.d", "/checks.d"]
+
+EXPOSE 8125/udp 8126/tcp
+
+# Healthcheck
+HEALTHCHECK --interval=5m --timeout=3s --retries=1 \
+  CMD test $(/opt/datadog-agent/embedded/bin/python /opt/datadog-agent/bin/supervisorctl \
+      -c /etc/dd-agent/supervisor.conf status | awk '{print $2}' | egrep -v 'RUNNING|EXITED' | wc -l) \
+      -eq 0 || exit 1
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["supervisord", "-n", "-c", "/etc/dd-agent/supervisor.conf"]
