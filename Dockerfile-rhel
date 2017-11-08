@@ -26,6 +26,9 @@ LABEL name="datadog/docker-dd-agent:latest-rhel" \
 # add man page
 COPY help.1 /help.1
 
+### add licenses to this directory
+COPY licenses /licenses
+
 #Adding Datadog repo
 COPY datadog.repo /etc/yum.repos.d/datadog.repo
 
